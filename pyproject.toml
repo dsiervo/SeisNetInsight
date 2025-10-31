@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seisnetinsight"
+version = "0.1.0"
+description = "Tools for computing seismic monitoring priority grids and maps"
+authors = [{name = "SeisNetInsight Team"}]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "tqdm>=4.65",
+    "pyproj>=3.5",
+    "streamlit>=1.31",
+    "pydeck>=0.8",
+    "geopandas>=0.14",
+    "matplotlib>=3.7",
+    "pyarrow>=12",
+    "shapely>=2.0",
+    "cartopy>=0.22",
+    "cmcrameri>=1.7"
+]
+
+[project.optional-dependencies]
+app = ["streamlit-folium>=0.15"]
+
+[project.scripts]
+seisnetinsight-app = "seisnetinsight.cli:run_app"
+
+[tool.setuptools.packages.find]
+include = ["seisnetinsight"]
