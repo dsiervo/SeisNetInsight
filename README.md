@@ -59,13 +59,11 @@ swd = compute_swd_grid(swd_df, grid, params)
 combined = compute_composite_index(subjects.merge(gap, on=["latitude", "longitude"]).merge(swd, on=["latitude", "longitude"]), params)
 ```
 
-Refer to the Streamlit app for a guided workflow and session persistence utilities.
-
 # Output Examples
-(a–c) are station-impact maps: brighter colors indicate grid cells where placing a station would affect a larger number of recency-weighted events. (a) Recency-weighted count of events that would be brought within 4 km by a station at each grid cell. (b) Same as (a) for a 10 km radius. (c) Recency-weighted count of events whose maximum azimuthal gap would be reduced to ≤90° by a station at each cell. (d) Cumulative salt-water-disposal volume within 25 km (barrels). Black outline denotes the Midland Basin:
+Panels (a–c) show how adding a new station would affect nearby events. Brighter colors mean that placing a station in that grid cell would impact more recent events. (a) shows how many recency-weighted events would fall within 4 km of a station. (b) shows the same for a 10 km radius. (c) shows how many events would have their maximum azimuthal gap reduced to ≤90° if a station were placed there. (d) shows the total salt-water-disposal volume within 25 km (in barrels). The black outline marks the Midland Basin:
 <img width="520" height="500" alt="image" src="https://github.com/user-attachments/assets/3f67335f-5525-4fbe-b931-56f7d7fa2c0d" />
 
-(a) Composite impact index (0–1) combining the four metrics—S₄, S₁₀, ΔGap ≤ 90°, and SWD—after recency weighting, min–max scaling, and user-set weights; brighter cells indicate grid locations where a new station would yield the largest combined benefit. (b) Priority regions derived by k-means clustering of the scaled metrics and ranked by mean composite index (Very High, High, Medium, Low). Blue triangles mark existing stations; the black outline denotes the Midland Basin.
+(a) Map of a composite impact index (ranging from 0 to 1) that combines four metrics—S₄, S₁₀, ΔGap ≤ 90°, and SWD after adjusting for scaling, and weighting. Brighter colors highlight areas where a new station would have the most combined benefit. (b) Priority areas determined by k-means clustering of these metrics, ranked by their average composite index (Very High, High, Medium, Low). Blue triangles show current stations; the black outline marks the Midland Basin.
 <img width="900" height="521" alt="image" src="https://github.com/user-attachments/assets/53a6fec4-0de5-4c7e-8e01-c358656033da" />
 
 
