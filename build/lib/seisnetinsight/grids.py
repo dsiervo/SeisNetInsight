@@ -68,51 +68,58 @@ def compute_subject_grids(
     station_coords = stations[["latitude", "longitude"]].to_numpy()
 
     dist_events_stations = _haversine(event_coords, station_coords)
-    within4 = (dist_events_stations <= params.dist_threshold_sub4).sum(axis=1) >= params.min_sta_sub4
-    within10 = (dist_events_stations <= params.dist_threshold_sub10).sum(axis=1) >= params.min_sta_sub10
-    subject4_mask = ~within4
-    subject10_mask = ~within10
+    within_primary = (
+        (dist_events_stations <= params.subject_primary_radius_km).sum(axis=1)
+        >= params.subject_primary_min_stations
+    )
+    within_secondary = (
+        (dist_events_stations <= params.subject_secondary_radius_km).sum(axis=1)
+        >= params.subject_secondary_min_stations
+    )
+    subject_primary_mask = ~within_primary
+    subject_secondary_mask = ~within_secondary
 
     if "origin_time" in events.columns and events["origin_time"].notna().any():
         ref_time = events["origin_time"].max()
         age_years = (ref_time - events["origin_time"]).dt.days / 365.25
-        weights = np.power(0.5, age_years / params.half_time_years).astype(float)
+        weights = np.power(0.5, age_years / params.half_time_years)
     else:
         weights = np.ones(len(events), dtype=float)
+    weights = np.asarray(weights, dtype=float)
 
     grid_coords = grid.coordinates
     n_grid = grid.size
     chunk = max(500, int(2000 * (0.01 / params.grid_step)))
     chunk = min(chunk, n_grid)
 
-    count_sub4 = np.zeros(n_grid, dtype=np.int32)
-    count_sub10 = np.zeros(n_grid, dtype=np.int32)
-    weighted_sub4 = np.zeros(n_grid, dtype=float)
-    weighted_sub10 = np.zeros(n_grid, dtype=float)
+    primary_counts = np.zeros(n_grid, dtype=np.int32)
+    secondary_counts = np.zeros(n_grid, dtype=np.int32)
+    primary_weighted = np.zeros(n_grid, dtype=float)
+    secondary_weighted = np.zeros(n_grid, dtype=float)
 
     for start in range(0, n_grid, chunk):
         if should_stop and should_stop():
             raise InterruptedError("Subject grid computation interrupted by user.")
         end = min(start + chunk, n_grid)
         distances = _haversine(grid_coords[start:end], event_coords)
-        if subject4_mask.any():
-            mask = distances[:, subject4_mask] <= params.dist_threshold_sub4
-            count_sub4[start:end] = mask.sum(axis=1)
-            weighted_sub4[start:end] = (mask * weights[subject4_mask]).sum(axis=1)
-        if subject10_mask.any():
-            mask10 = distances[:, subject10_mask] <= params.dist_threshold_sub10
-            count_sub10[start:end] = mask10.sum(axis=1)
-            weighted_sub10[start:end] = (mask10 * weights[subject10_mask]).sum(axis=1)
+        if subject_primary_mask.any():
+            mask = distances[:, subject_primary_mask] <= params.subject_primary_radius_km
+            primary_counts[start:end] = mask.sum(axis=1)
+            primary_weighted[start:end] = (mask * weights[subject_primary_mask]).sum(axis=1)
+        if subject_secondary_mask.any():
+            mask_secondary = distances[:, subject_secondary_mask] <= params.subject_secondary_radius_km
+            secondary_counts[start:end] = mask_secondary.sum(axis=1)
+            secondary_weighted[start:end] = (mask_secondary * weights[subject_secondary_mask]).sum(axis=1)
         _progress_wrapper(progress, end / n_grid, "Subject grids")
 
     return pd.DataFrame(
         {
             "latitude": grid_coords[:, 0],
             "longitude": grid_coords[:, 1],
-            "subject4_within_4km": count_sub4,
-            "subject10_within_10km": count_sub10,
-            "subject4_within_4km_weighted": weighted_sub4,
-            "subject10_within_10km_weighted": weighted_sub10,
+            "subject_primary_count": primary_counts,
+            "subject_secondary_count": secondary_counts,
+            "subject_primary_weighted": primary_weighted,
+            "subject_secondary_weighted": secondary_weighted,
         }
     )
 
@@ -273,8 +280,8 @@ def merge_grids(*frames: pd.DataFrame) -> pd.DataFrame:
 
 def compute_composite_index(df: pd.DataFrame, params: GridParameters) -> pd.DataFrame:
     required_columns = [
-        "subject4_within_4km_weighted",
-        "subject10_within_10km_weighted",
+        "subject_primary_weighted",
+        "subject_secondary_weighted",
         "delta_gap90_weighted",
         "swd_volume_25km_bbl",
     ]
@@ -291,8 +298,8 @@ def compute_composite_index(df: pd.DataFrame, params: GridParameters) -> pd.Data
     weights = params.normalized_weights()
 
     scaled = {
-        "subject4": minmax(df["subject4_within_4km_weighted"]),
-        "subject10": minmax(df["subject10_within_10km_weighted"]),
+        "subject_primary": minmax(df["subject_primary_weighted"]),
+        "subject_secondary": minmax(df["subject_secondary_weighted"]),
         "gap": minmax(df["delta_gap90_weighted"]),
         "swd": minmax(df["swd_volume_25km_bbl"]),
     }
@@ -300,8 +307,8 @@ def compute_composite_index(df: pd.DataFrame, params: GridParameters) -> pd.Data
     composite = sum(weights[key] * scaled[key] for key in scaled)
     df = df.copy()
     df["composite_index"] = composite
-    df["contrib_subject4"] = weights["subject4"] * scaled["subject4"]
-    df["contrib_subject10"] = weights["subject10"] * scaled["subject10"]
+    df["contrib_subject_primary"] = weights["subject_primary"] * scaled["subject_primary"]
+    df["contrib_subject_secondary"] = weights["subject_secondary"] * scaled["subject_secondary"]
     df["contrib_gap"] = weights["gap"] * scaled["gap"]
     df["contrib_swd"] = weights["swd"] * scaled["swd"]
     return df
