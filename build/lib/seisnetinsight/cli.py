@@ -13,5 +13,4 @@ def run_app() -> None:
         raise SystemExit("Streamlit is required to run the SeisNetInsight app.")
 
     script_path = Path(__file__).with_name("streamlit_app.py")
-    # Pass False for is_hello to launch a regular Streamlit app session.
-    bootstrap.run(str(script_path), False, [], {})
+    bootstrap.run(str(script_path), "seisnetinsight", [], {})
