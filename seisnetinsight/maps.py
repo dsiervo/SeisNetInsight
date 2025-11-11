@@ -60,6 +60,7 @@ class MapArtifacts:
     deck: pdk.Deck
     png_bytes: bytes
     kml_bytes: Optional[bytes]
+    kmz_bytes: Optional[bytes]
     shp_bytes: Optional[bytes]
 
 
@@ -145,6 +146,22 @@ def _export_kml(gdf: gpd.GeoDataFrame, feature: str) -> Optional[bytes]:
         return None
 
 
+def _export_kmz(gdf: gpd.GeoDataFrame, feature: str) -> Optional[bytes]:
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            kml_path = tmp_path / f"{feature}.kml"
+            gdf.to_file(kml_path, driver="KML")
+            kmz_path = tmp_path / f"{feature}.kmz"
+            import zipfile
+
+            with zipfile.ZipFile(kmz_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.write(kml_path, arcname=kml_path.name)
+            return kmz_path.read_bytes()
+    except Exception:
+        return None
+
+
 def _export_shapefile(gdf: gpd.GeoDataFrame, feature: str) -> Optional[bytes]:
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -168,8 +185,9 @@ def export_feature_map(df: pd.DataFrame, feature: str) -> MapArtifacts:
     png_bytes = _export_static_map(df, feature)
     gdf = _grid_to_geodataframe(df[["latitude", "longitude", feature]])
     kml_bytes = _export_kml(gdf, feature)
+    kmz_bytes = _export_kmz(gdf, feature)
     shp_bytes = _export_shapefile(gdf, feature)
-    return MapArtifacts(feature, deck, png_bytes, kml_bytes, shp_bytes)
+    return MapArtifacts(feature, deck, png_bytes, kml_bytes, kmz_bytes, shp_bytes)
 
 
 def export_priority_map(df: pd.DataFrame) -> MapArtifacts:
@@ -177,8 +195,9 @@ def export_priority_map(df: pd.DataFrame) -> MapArtifacts:
     png_bytes = _export_static_map(df, "composite_index")
     gdf = _grid_to_geodataframe(df[["latitude", "longitude", "composite_index"]])
     kml_bytes = _export_kml(gdf, "priority")
+    kmz_bytes = _export_kmz(gdf, "priority")
     shp_bytes = _export_shapefile(gdf, "priority")
-    return MapArtifacts("priority", deck, png_bytes, kml_bytes, shp_bytes)
+    return MapArtifacts("priority", deck, png_bytes, kml_bytes, kmz_bytes, shp_bytes)
 
 
 def classify_priority_clusters(

@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from .config import GridParameters, parameter_dict
+from .config import GridParameters, parameter_dict, parse_bounds
 
 SESSION_ROOT = Path.home() / ".seisnetinsight" / "sessions"
 SESSION_ROOT.mkdir(parents=True, exist_ok=True)
@@ -29,6 +29,7 @@ class SessionState:
     parameters: GridParameters
     files: SessionFiles
     grids: Dict[str, str] = field(default_factory=dict)
+    column_mapping: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     def directory(self) -> Path:
         return SESSION_ROOT / self.name
@@ -40,6 +41,7 @@ class SessionState:
             "parameters": parameter_dict(self.parameters),
             "files": asdict(self.files),
             "grids": self.grids,
+            "column_mapping": self.column_mapping,
         }
         (directory / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
@@ -49,26 +51,63 @@ class SessionState:
         if not directory.exists():
             raise FileNotFoundError(f"Session '{name}' does not exist")
         metadata = json.loads((directory / "metadata.json").read_text())
+        raw_params = metadata.get("parameters", {})
         params = GridParameters()
-        params = params.__class__(**{
-            "lons": tuple(map(float, metadata["parameters"]["LONS"].split(","))),
-            "lats": tuple(map(float, metadata["parameters"]["LATS"].split(","))),
-            "grid_step": float(metadata["parameters"]["GRID_STEP"]),
-            "dist_threshold_sub4": float(metadata["parameters"]["DIST_THRESHOLD_SUB4"]),
-            "min_sta_sub4": int(metadata["parameters"]["MIN_STA_SUB4"]),
-            "weight_sub4": float(metadata["parameters"]["WEIGHT_SUB4"]),
-            "dist_threshold_sub10": float(metadata["parameters"]["DIST_THRESHOLD_SUB10"]),
-            "min_sta_sub10": int(metadata["parameters"]["MIN_STA_SUB10"]),
-            "weight_sub10": float(metadata["parameters"]["WEIGHT_SUB10"]),
-            "gap_search_km": float(metadata["parameters"]["GAP_SEARCH_KM"]),
-            "weight_gap": float(metadata["parameters"]["WEIGHT_GAP"]),
-            "swd_radius_km": float(metadata["parameters"]["SWD_RADIUS_KM"]),
-            "weight_swd": float(metadata["parameters"]["WEIGHT_SWD"]),
-            "half_time_years": float(metadata["parameters"]["HALF_TIME_YEARS"]),
-            "overwrite": bool(metadata["parameters"]["OVERWRITE"]),
-        })
+
+        def _get(primary: str, legacy: Optional[str], cast, default):
+            for key in filter(None, (primary, legacy)):
+                if key in raw_params:
+                    value = raw_params[key]
+                    try:
+                        return cast(value)
+                    except Exception:
+                        return default
+            return default
+
+        params.lons = parse_bounds(str(raw_params.get("LONS", ",".join(map(str, params.lons)))), params.lons)
+        params.lats = parse_bounds(str(raw_params.get("LATS", ",".join(map(str, params.lats)))), params.lats)
+        params.grid_step = _get("GRID_STEP", None, float, params.grid_step)
+        params.subject_primary_radius_km = _get(
+            "SUBJECT_PRIMARY_RADIUS_KM", "DIST_THRESHOLD_SUB4", float, params.subject_primary_radius_km
+        )
+        params.subject_primary_min_stations = _get(
+            "SUBJECT_PRIMARY_MIN_STATIONS", "MIN_STA_SUB4", int, params.subject_primary_min_stations
+        )
+        params.subject_primary_weight = _get(
+            "SUBJECT_PRIMARY_WEIGHT", "WEIGHT_SUB4", float, params.subject_primary_weight
+        )
+        params.subject_secondary_radius_km = _get(
+            "SUBJECT_SECONDARY_RADIUS_KM", "DIST_THRESHOLD_SUB10", float, params.subject_secondary_radius_km
+        )
+        params.subject_secondary_min_stations = _get(
+            "SUBJECT_SECONDARY_MIN_STATIONS", "MIN_STA_SUB10", int, params.subject_secondary_min_stations
+        )
+        params.subject_secondary_weight = _get(
+            "SUBJECT_SECONDARY_WEIGHT", "WEIGHT_SUB10", float, params.subject_secondary_weight
+        )
+        params.gap_search_km = _get("GAP_SEARCH_KM", None, float, params.gap_search_km)
+        params.gap_target_angle_deg = _get("GAP_TARGET_ANGLE", None, float, params.gap_target_angle_deg)
+        params.weight_gap = _get("WEIGHT_GAP", None, float, params.weight_gap)
+        params.swd_radius_km = _get("SWD_RADIUS_KM", None, float, params.swd_radius_km)
+        params.weight_swd = _get("WEIGHT_SWD", None, float, params.weight_swd)
+
+        def _to_bool(value: object, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.lower() in {"1", "true", "yes", "on"}
+            return bool(value)
+
+        params.half_time_years = _get("HALF_TIME_YEARS", None, float, params.half_time_years)
+        params.overwrite = _to_bool(raw_params.get("OVERWRITE", params.overwrite), params.overwrite)
         files = SessionFiles(**metadata["files"])
-        return cls(name=name, parameters=params, files=files, grids=metadata.get("grids", {}))
+        return cls(
+            name=name,
+            parameters=params,
+            files=files,
+            grids=metadata.get("grids", {}),
+            column_mapping=metadata.get("column_mapping", {}),
+        )
 
     def save_dataframe(self, df: pd.DataFrame, key: str) -> None:
         directory = self.directory()

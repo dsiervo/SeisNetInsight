@@ -15,13 +15,14 @@ class GridParameters:
     lons: Tuple[float, float] = (-102.9, -100.4)
     lats: Tuple[float, float] = (30.5, 34.0)
     grid_step: float = 0.01
-    dist_threshold_sub4: float = 4.0
-    min_sta_sub4: int = 1
-    weight_sub4: float = 0.4
-    dist_threshold_sub10: float = 10.0
-    min_sta_sub10: int = 1
-    weight_sub10: float = 0.35
+    subject_primary_radius_km: float = 4.0
+    subject_primary_min_stations: int = 1
+    subject_primary_weight: float = 0.4
+    subject_secondary_radius_km: float = 10.0
+    subject_secondary_min_stations: int = 1
+    subject_secondary_weight: float = 0.35
     gap_search_km: float = 30.0
+    gap_target_angle_deg: float = 90.0
     weight_gap: float = 0.05
     swd_radius_km: float = 25.0
     weight_swd: float = 0.2
@@ -36,8 +37,8 @@ class GridParameters:
 
     def normalized_weights(self) -> Dict[str, float]:
         weights = {
-            "subject4": max(self.weight_sub4, 0.0),
-            "subject10": max(self.weight_sub10, 0.0),
+            "subject_primary": max(self.subject_primary_weight, 0.0),
+            "subject_secondary": max(self.subject_secondary_weight, 0.0),
             "gap": max(self.weight_gap, 0.0),
             "swd": max(self.weight_swd, 0.0),
         }
@@ -51,13 +52,14 @@ DEFAULT_PARAMETER_NAMES = [
     "LONS",
     "LATS",
     "GRID_STEP",
-    "DIST_THRESHOLD_SUB4",
-    "MIN_STA_SUB4",
-    "WEIGHT_SUB4",
-    "DIST_THRESHOLD_SUB10",
-    "MIN_STA_SUB10",
-    "WEIGHT_SUB10",
+    "SUBJECT_PRIMARY_RADIUS_KM",
+    "SUBJECT_PRIMARY_MIN_STATIONS",
+    "SUBJECT_PRIMARY_WEIGHT",
+    "SUBJECT_SECONDARY_RADIUS_KM",
+    "SUBJECT_SECONDARY_MIN_STATIONS",
+    "SUBJECT_SECONDARY_WEIGHT",
     "GAP_SEARCH_KM",
+    "GAP_TARGET_ANGLE",
     "WEIGHT_GAP",
     "SWD_RADIUS_KM",
     "WEIGHT_SWD",
@@ -94,22 +96,39 @@ def warn_missing_parameter(name: str, default_value: object, logger: Optional[Ca
 def parameter_from_inputs(inputs: Dict[str, object], logger: Optional[Callable[[str], None]] = None) -> GridParameters:
     params = default_parameters()
 
-    def get(key: str, default: object) -> object:
-        if key not in inputs or inputs[key] in (None, ""):
-            warn_missing_parameter(key, default, logger)
-            return default
-        return inputs[key]
+    def get(keys: Iterable[str] | str, default: object) -> object:
+        if isinstance(keys, str):
+            keys = (keys,)
+        primary = next(iter(keys))
+        for key in keys:
+            if key in inputs and inputs[key] not in (None, ""):
+                return inputs[key]
+        warn_missing_parameter(primary, default, logger)
+        return default
 
     params.lons = parse_bounds(str(get("LONS", ",".join(map(str, params.lons)))), params.lons)
     params.lats = parse_bounds(str(get("LATS", ",".join(map(str, params.lats)))), params.lats)
     params.grid_step = float(get("GRID_STEP", params.grid_step))
-    params.dist_threshold_sub4 = float(get("DIST_THRESHOLD_SUB4", params.dist_threshold_sub4))
-    params.min_sta_sub4 = int(get("MIN_STA_SUB4", params.min_sta_sub4))
-    params.weight_sub4 = float(get("WEIGHT_SUB4", params.weight_sub4))
-    params.dist_threshold_sub10 = float(get("DIST_THRESHOLD_SUB10", params.dist_threshold_sub10))
-    params.min_sta_sub10 = int(get("MIN_STA_SUB10", params.min_sta_sub10))
-    params.weight_sub10 = float(get("WEIGHT_SUB10", params.weight_sub10))
+    params.subject_primary_radius_km = float(
+        get(("SUBJECT_PRIMARY_RADIUS_KM", "DIST_THRESHOLD_SUB4"), params.subject_primary_radius_km)
+    )
+    params.subject_primary_min_stations = int(
+        get(("SUBJECT_PRIMARY_MIN_STATIONS", "MIN_STA_SUB4"), params.subject_primary_min_stations)
+    )
+    params.subject_primary_weight = float(
+        get(("SUBJECT_PRIMARY_WEIGHT", "WEIGHT_SUB4"), params.subject_primary_weight)
+    )
+    params.subject_secondary_radius_km = float(
+        get(("SUBJECT_SECONDARY_RADIUS_KM", "DIST_THRESHOLD_SUB10"), params.subject_secondary_radius_km)
+    )
+    params.subject_secondary_min_stations = int(
+        get(("SUBJECT_SECONDARY_MIN_STATIONS", "MIN_STA_SUB10"), params.subject_secondary_min_stations)
+    )
+    params.subject_secondary_weight = float(
+        get(("SUBJECT_SECONDARY_WEIGHT", "WEIGHT_SUB10"), params.subject_secondary_weight)
+    )
     params.gap_search_km = float(get("GAP_SEARCH_KM", params.gap_search_km))
+    params.gap_target_angle_deg = float(get("GAP_TARGET_ANGLE", params.gap_target_angle_deg))
     params.weight_gap = float(get("WEIGHT_GAP", params.weight_gap))
     params.swd_radius_km = float(get("SWD_RADIUS_KM", params.swd_radius_km))
     params.weight_swd = float(get("WEIGHT_SWD", params.weight_swd))
@@ -123,13 +142,14 @@ def parameter_dict(params: GridParameters) -> Dict[str, object]:
         "LONS": f"{params.lons[0]},{params.lons[1]}",
         "LATS": f"{params.lats[0]},{params.lats[1]}",
         "GRID_STEP": params.grid_step,
-        "DIST_THRESHOLD_SUB4": params.dist_threshold_sub4,
-        "MIN_STA_SUB4": params.min_sta_sub4,
-        "WEIGHT_SUB4": params.weight_sub4,
-        "DIST_THRESHOLD_SUB10": params.dist_threshold_sub10,
-        "MIN_STA_SUB10": params.min_sta_sub10,
-        "WEIGHT_SUB10": params.weight_sub10,
+        "SUBJECT_PRIMARY_RADIUS_KM": params.subject_primary_radius_km,
+        "SUBJECT_PRIMARY_MIN_STATIONS": params.subject_primary_min_stations,
+        "SUBJECT_PRIMARY_WEIGHT": params.subject_primary_weight,
+        "SUBJECT_SECONDARY_RADIUS_KM": params.subject_secondary_radius_km,
+        "SUBJECT_SECONDARY_MIN_STATIONS": params.subject_secondary_min_stations,
+        "SUBJECT_SECONDARY_WEIGHT": params.subject_secondary_weight,
         "GAP_SEARCH_KM": params.gap_search_km,
+        "GAP_TARGET_ANGLE": getattr(params, "gap_target_angle_deg", 90.0),
         "WEIGHT_GAP": params.weight_gap,
         "SWD_RADIUS_KM": params.swd_radius_km,
         "WEIGHT_SWD": params.weight_swd,

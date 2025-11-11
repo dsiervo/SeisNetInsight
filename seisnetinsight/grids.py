@@ -158,10 +158,11 @@ def compute_gap_grid(
         raise ValueError("Events and stations data must be provided to compute gap grids.")
 
     critical_events = []
+    threshold = float(getattr(params, "gap_target_angle_deg", 90.0))
     for idx, row in events.iterrows():
         subset = _station_subset(stations, row["latitude"], row["longitude"], params.gap_search_km)
         max_gap = _max_gap(row["latitude"], row["longitude"], subset)
-        if max_gap > 90.0:
+        if max_gap > threshold:
             critical_events.append((idx, row, max_gap))
     if not critical_events:
         return pd.DataFrame(
@@ -206,7 +207,7 @@ def compute_gap_grid(
             insert_pos = np.searchsorted(base_azimuths, az_new)
             extended = np.insert(base_azimuths, insert_pos, az_new)
             diffs = np.diff(np.append(extended, extended[0] + 360.0))
-            if diffs.max() <= 90.0:
+            if diffs.max() <= threshold:
                 improvements[gi] += weights.iloc[i]
         _progress_wrapper(progress, (i + 1) / len(critical_events), "ΔGap90 grid")
 

@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from pathlib import Path
+import tempfile
+import zipfile
+from typing import Dict, List, Optional, Tuple
 
+import geopandas as gpd
+import numpy as np
 import pandas as pd
 import streamlit as st
+from cmcrameri import cm as cmc
+from PIL import Image
+import matplotlib as mpl
 
 from seisnetinsight.config import (
     GridParameters,
@@ -40,7 +49,7 @@ from seisnetinsight.legacy_maps import (
     render_legacy_contour,
     render_priority_clusters,
 )
-from seisnetinsight.maps import PRIORITY_LEVELS, classify_priority_clusters
+from seisnetinsight.maps import PRIORITY_COLORS, PRIORITY_LEVELS, classify_priority_clusters
 from seisnetinsight.sessions import SessionFiles, SessionState, list_sessions
 
 
@@ -231,6 +240,9 @@ LEGACY_FEATURE_ALIAS = {
     "composite_index": "composite_index",
 }
 
+OVERLAY_ALPHA = 0.7
+
+
 LEGACY_FEATURE_ORDER = [
     ("subject4_within_4km_weighted", "S4 (recency-weighted)"),
     ("subject10_within_10km_weighted", "S10 (recency-weighted)"),
@@ -239,9 +251,132 @@ LEGACY_FEATURE_ORDER = [
     ("composite_index", "Composite index"),
 ]
 
+def _pivot_grid(df: pd.DataFrame, value_col: str) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    if value_col not in df.columns:
+        return None
+    pivot = (
+        df.pivot_table(index="latitude", columns="longitude", values=value_col, aggfunc="mean")
+        .sort_index(axis=0)
+        .sort_index(axis=1)
+    )
+    if pivot.empty:
+        return None
+    return pivot.index.to_numpy(), pivot.columns.to_numpy(), pivot.to_numpy()
+
+
+def _rgba_overlay_png(rgba: np.ndarray) -> Optional[bytes]:
+    if rgba.size == 0:
+        return None
+    rgba_uint8 = np.clip(rgba * 255.0, 0, 255).astype(np.uint8)
+    # Flip vertically so north is up when rendered.
+    rgba_uint8 = rgba_uint8[::-1]
+    buffer = io.BytesIO()
+    try:
+        Image.fromarray(rgba_uint8, mode="RGBA").save(buffer, format="PNG")
+    except Exception:
+        return None
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _ground_overlay_kmz(png_bytes: bytes, name: str, *, north: float, south: float, east: float, west: float) -> Optional[bytes]:
+    if not png_bytes:
+        return None
+    kml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>{name}</name>
+    <GroundOverlay>
+      <name>{name}</name>
+      <Icon>
+        <href>overlay.png</href>
+      </Icon>
+      <LatLonBox>
+        <north>{north:.6f}</north>
+        <south>{south:.6f}</south>
+        <east>{east:.6f}</east>
+        <west>{west:.6f}</west>
+      </LatLonBox>
+    </GroundOverlay>
+  </Document>
+</kml>
+"""
+    buffer = io.BytesIO()
+    try:
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("doc.kml", kml)
+            archive.writestr("overlay.png", png_bytes)
+    except Exception:
+        return None
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _legacy_overlay_kmz(df: pd.DataFrame, feature: str, params: GridParameters) -> Optional[bytes]:
+    grid = _pivot_grid(df, feature)
+    if grid is None:
+        return None
+    lats, lons, values = grid
+    valid = np.isfinite(values)
+    if not valid.any():
+        return None
+    if feature == "composite_index":
+        levels = np.linspace(0.0, 1.0, 11)
+    else:
+        zmin = float(np.nanmin(values))
+        zmax = float(np.nanmax(values))
+        if not np.isfinite(zmin) or not np.isfinite(zmax) or zmax <= zmin:
+            levels = np.linspace(0.0, 1.0, 12)
+        else:
+            levels = np.linspace(zmin, zmax, 12)
+    cmap = cmc.batlow
+    norm = mpl.colors.Normalize(vmin=float(levels[0]), vmax=float(levels[-1]))
+    rgba = cmap(norm(values))
+    rgba[..., 3] = np.where(valid, OVERLAY_ALPHA, 0.0)
+    png_bytes = _rgba_overlay_png(rgba)
+    if png_bytes is None:
+        return None
+    north = float(params.lats[1])
+    south = float(params.lats[0])
+    east = float(params.lons[1])
+    west = float(params.lons[0])
+    return _ground_overlay_kmz(png_bytes, feature, north=north, south=south, east=east, west=west)
+
+
+def _priority_overlay_kmz(df: pd.DataFrame, params: GridParameters) -> Optional[bytes]:
+    if "priority_label" not in df.columns:
+        return None
+    pivot = (
+        df.pivot_table(index="latitude", columns="longitude", values="priority_label", aggfunc="first")
+        .sort_index(axis=0)
+        .sort_index(axis=1)
+    )
+    if pivot.empty:
+        return None
+    labels = pivot.to_numpy(dtype=object)
+    rgba = np.zeros(labels.shape + (4,), dtype=float)
+    for label in np.unique(labels.astype(object)):
+        if label is None or (isinstance(label, float) and np.isnan(label)):
+            continue
+        rgb = PRIORITY_COLORS.get(label, PRIORITY_COLORS[PRIORITY_LEVELS[-1]])
+        mask = labels == label
+        rgba[mask, 0] = rgb[0] / 255.0
+        rgba[mask, 1] = rgb[1] / 255.0
+        rgba[mask, 2] = rgb[2] / 255.0
+        rgba[mask, 3] = OVERLAY_ALPHA
+    png_bytes = _rgba_overlay_png(rgba)
+    if png_bytes is None:
+        return None
+    north = float(params.lats[1])
+    south = float(params.lats[0])
+    east = float(params.lons[1])
+    west = float(params.lons[0])
+    return _ground_overlay_kmz(png_bytes, "priority_overlay", north=north, south=south, east=east, west=west)
+
+
 
 def _default_session_name() -> str:
-    return dt.datetime.utcnow().strftime("session-%Y%m%d-%H%M%S")
+    return dt.datetime.now(dt.UTC).strftime("session-%Y%m%d-%H%M%S")
 
 
 def get_working_session() -> WorkingSession:
@@ -482,40 +617,118 @@ def _render_data_loading(session: WorkingSession) -> None:
     st.markdown("---")
     st.subheader("New session setup")
     session_name = st.text_input("Session name", value=session.name)
-    lons_input = st.text_input("Longitude bounds (min,max)", value=",".join(map(str, session.parameters.lons)))
-    lats_input = st.text_input("Latitude bounds (min,max)", value=",".join(map(str, session.parameters.lats)))
-    grid_step = st.number_input("Grid step (degrees)", value=float(session.parameters.grid_step), min_value=0.001, step=0.001)
-    primary_radius = st.number_input(
-        "Subject primary radius (km)", value=float(session.parameters.subject_primary_radius_km)
-    )
-    primary_min = st.number_input(
-        "Minimum stations within primary radius",
-        value=int(session.parameters.subject_primary_min_stations),
-        min_value=0,
-    )
-    primary_weight = st.number_input(
-        "Weight subject primary", value=float(session.parameters.subject_primary_weight)
-    )
-    secondary_radius = st.number_input(
-        "Subject secondary radius (km)", value=float(session.parameters.subject_secondary_radius_km)
-    )
-    secondary_min = st.number_input(
-        "Minimum stations within secondary radius",
-        value=int(session.parameters.subject_secondary_min_stations),
-        min_value=0,
-    )
-    secondary_weight = st.number_input(
-        "Weight subject secondary", value=float(session.parameters.subject_secondary_weight)
-    )
-    gap_search = st.number_input("Gap search radius (km)", value=float(session.parameters.gap_search_km))
-    weight_gap = st.number_input("Weight ΔGap90", value=float(session.parameters.weight_gap))
-    swd_radius = st.number_input("SWD radius (km)", value=float(session.parameters.swd_radius_km))
-    weight_swd = st.number_input("Weight SWD", value=float(session.parameters.weight_swd))
-    half_time = st.number_input("Half-time (years)", value=float(session.parameters.half_time_years))
-    overwrite = st.checkbox("Overwrite cached grids", value=session.parameters.overwrite)
 
-    balltree_enabled = st.checkbox("Apply BallTree data reduction", value=session.balltree_enabled)
-    balltree_distance = st.number_input("BallTree distance threshold (km)", value=float(session.balltree_distance), min_value=0.1, step=0.1)
+    gap_target_angle_default = float(getattr(session.parameters, "gap_target_angle_deg", 90.0))
+    if not hasattr(session.parameters, "gap_target_angle_deg"):
+        session.parameters.gap_target_angle_deg = gap_target_angle_default
+
+    bounds_cols = st.columns(3)
+    with bounds_cols[0]:
+        lons_input = st.text_input(
+            "Longitude bounds (min,max)",
+            value=",".join(map(str, session.parameters.lons)),
+        )
+    with bounds_cols[1]:
+        lats_input = st.text_input(
+            "Latitude bounds (min,max)",
+            value=",".join(map(str, session.parameters.lats)),
+        )
+    with bounds_cols[2]:
+        grid_step = st.number_input(
+            "Grid step (degrees)",
+            value=float(session.parameters.grid_step),
+            min_value=0.001,
+            step=0.001,
+        )
+
+    st.markdown("**Subject weighting**")
+    subject_primary_cols = st.columns(3)
+    with subject_primary_cols[0]:
+        primary_radius = st.number_input(
+            "Subject primary radius (km)",
+            value=float(session.parameters.subject_primary_radius_km),
+        )
+    with subject_primary_cols[1]:
+        primary_min = st.number_input(
+            "Minimum stations within primary radius",
+            value=int(session.parameters.subject_primary_min_stations),
+            min_value=0,
+        )
+    with subject_primary_cols[2]:
+        primary_weight = st.number_input(
+            "Weight subject primary",
+            value=float(session.parameters.subject_primary_weight),
+        )
+
+    subject_secondary_cols = st.columns(3)
+    with subject_secondary_cols[0]:
+        secondary_radius = st.number_input(
+            "Subject secondary radius (km)",
+            value=float(session.parameters.subject_secondary_radius_km),
+        )
+    with subject_secondary_cols[1]:
+        secondary_min = st.number_input(
+            "Minimum stations within secondary radius",
+            value=int(session.parameters.subject_secondary_min_stations),
+            min_value=0,
+        )
+    with subject_secondary_cols[2]:
+        secondary_weight = st.number_input(
+            "Weight subject secondary",
+            value=float(session.parameters.subject_secondary_weight),
+        )
+
+    gap_cols = st.columns(3)
+    with gap_cols[0]:
+        gap_search = st.number_input(
+            "Gap search radius (km)",
+            value=float(session.parameters.gap_search_km),
+        )
+    with gap_cols[1]:
+        gap_target_angle = st.number_input(
+            "ΔGap target angle (°)",
+            value=float(getattr(session.parameters, "gap_target_angle_deg", gap_target_angle_default)),
+            min_value=0.0,
+            max_value=360.0,
+            step=1.0,
+        )
+    with gap_cols[2]:
+        weight_gap = st.number_input(
+            "Weight ΔGap90",
+            value=float(session.parameters.weight_gap),
+        )
+
+    swd_cols = st.columns(2)
+    with swd_cols[0]:
+        swd_radius = st.number_input(
+            "SWD radius (km)",
+            value=float(session.parameters.swd_radius_km),
+        )
+    with swd_cols[1]:
+        weight_swd = st.number_input(
+            "Weight SWD",
+            value=float(session.parameters.weight_swd),
+        )
+
+    final_cols = st.columns(2)
+    with final_cols[0]:
+        half_time = st.number_input(
+            "Half-time (years)",
+            value=float(session.parameters.half_time_years),
+        )
+    with final_cols[1]:
+        overwrite = st.checkbox("Overwrite cached grids", value=session.parameters.overwrite)
+
+    balltree_cols = st.columns(2)
+    with balltree_cols[0]:
+        balltree_enabled = st.checkbox("Apply BallTree data reduction", value=session.balltree_enabled)
+    with balltree_cols[1]:
+        balltree_distance = st.number_input(
+            "BallTree distance threshold (km)",
+            value=float(session.balltree_distance),
+            min_value=0.1,
+            step=0.1,
+        )
 
     events_file = st.file_uploader("Events file", type=["csv"])
     stations_file = st.file_uploader("Stations file", type=["csv"])
@@ -591,6 +804,7 @@ def _render_data_loading(session: WorkingSession) -> None:
         "SUBJECT_SECONDARY_MIN_STATIONS": secondary_min,
         "SUBJECT_SECONDARY_WEIGHT": secondary_weight,
         "GAP_SEARCH_KM": gap_search,
+        "GAP_TARGET_ANGLE": gap_target_angle,
         "WEIGHT_GAP": weight_gap,
         "SWD_RADIUS_KM": swd_radius,
         "WEIGHT_SWD": weight_swd,
@@ -598,6 +812,69 @@ def _render_data_loading(session: WorkingSession) -> None:
         "OVERWRITE": overwrite,
     }
     parameters = parameter_from_inputs(inputs, logger=st.warning)
+
+    previous_params = session.parameters
+
+    def _tuple_changed(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
+        if len(a) != len(b):
+            return True
+        return any(not math.isclose(float(x), float(y), rel_tol=1e-9, abs_tol=1e-9) for x, y in zip(a, b))
+
+    def _scalar_changed(a: float, b: float) -> bool:
+        return not math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-9)
+
+    geometry_changed = (
+        _tuple_changed(getattr(previous_params, "lons", ()), getattr(parameters, "lons", ()))
+        or _tuple_changed(getattr(previous_params, "lats", ()), getattr(parameters, "lats", ()))
+        or _scalar_changed(getattr(previous_params, "grid_step", 0.0), getattr(parameters, "grid_step", 0.0))
+    )
+
+    float_fields = [
+        "subject_primary_radius_km",
+        "subject_primary_weight",
+        "subject_secondary_radius_km",
+        "subject_secondary_weight",
+        "gap_search_km",
+        "gap_target_angle_deg",
+        "weight_gap",
+        "swd_radius_km",
+        "weight_swd",
+        "half_time_years",
+    ]
+    int_fields = [
+        "subject_primary_min_stations",
+        "subject_secondary_min_stations",
+    ]
+
+    params_changed = geometry_changed
+    if not params_changed:
+        for field in float_fields:
+            old_value = getattr(previous_params, field, None)
+            new_value = getattr(parameters, field, None)
+            if old_value is None or new_value is None:
+                if old_value != new_value:
+                    params_changed = True
+                    break
+            elif _scalar_changed(old_value, new_value):
+                params_changed = True
+                break
+    if not params_changed:
+        for field in int_fields:
+            if getattr(previous_params, field, None) != getattr(parameters, field, None):
+                params_changed = True
+                break
+    if not params_changed:
+        if getattr(previous_params, "overwrite", None) != getattr(parameters, "overwrite", None):
+            params_changed = True
+
+    session.parameters = parameters
+    if session.storage:
+        session.storage.parameters = session.parameters
+    if geometry_changed:
+        session.grid = None
+        session.grids.clear()
+    elif params_changed:
+        session.grids.pop("composite", None)
 
     def process_inputs(run_all: bool) -> None:
         if events_bytes is None or stations_bytes is None:
@@ -723,12 +1000,25 @@ def _render_maps_section(session: WorkingSession) -> None:
             )
             png_bytes = figure_png_bytes(fig)
             st.image(png_bytes, caption=label)
-            st.download_button(
+            kmz_bytes = _legacy_overlay_kmz(legacy_df, feature, session.parameters)
+            download_cols = st.columns(2)
+            download_cols[0].download_button(
                 label=f"Download {label} PNG",
                 data=png_bytes,
                 file_name=f"{feature}.png",
                 mime="image/png",
+                key=f"legacy_png_{feature}",
             )
+            if kmz_bytes:
+                download_cols[1].download_button(
+                    label=f"Download {label} overlay (KMZ)",
+                    data=kmz_bytes,
+                    file_name=f"{feature}_overlay.kmz",
+                    mime="application/vnd.google-earth.kmz",
+                    key=f"legacy_kmz_{feature}",
+                )
+            else:
+                download_cols[1].caption("KMZ export unavailable")
 
     st.subheader("K-means priority map")
     if "composite_index" not in merged.columns:
@@ -832,12 +1122,28 @@ def _render_maps_section(session: WorkingSession) -> None:
     )
     st.pyplot(fig)
     png_bytes = figure_png_bytes(fig)
-    st.download_button(
+    shapefile_columns = ["priority_cluster", "priority_label"]
+    if "composite_index" in prioritized.columns:
+        shapefile_columns.append("composite_index")
+    priority_overlay = _priority_overlay_kmz(prioritized, session.parameters)
+    download_cols = st.columns(2)
+    download_cols[0].download_button(
         label="Download priority map PNG",
         data=png_bytes,
         file_name=f"priority_map_k{n_clusters}.png",
         mime="image/png",
+        key="priority_png_download",
     )
+    if priority_overlay:
+        download_cols[1].download_button(
+            label="Download priority overlay (KMZ)",
+            data=priority_overlay,
+            file_name=f"priority_map_k{n_clusters}_overlay.kmz",
+            mime="application/vnd.google-earth.kmz",
+            key="priority_overlay_download",
+        )
+    else:
+        download_cols[1].caption("Overlay export unavailable")
 
     summary = (
         prioritized.groupby("priority_label")
@@ -846,7 +1152,7 @@ def _render_maps_section(session: WorkingSession) -> None:
         .reset_index()
         .sort_values("priority_label")
     )
-    st.dataframe(summary, use_container_width=True)
+    st.dataframe(summary, width="stretch")
 
     export_columns = ["latitude", "longitude", "priority_cluster", "priority_label"]
     if "composite_index" in prioritized.columns:
