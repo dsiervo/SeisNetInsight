@@ -1044,12 +1044,27 @@ def _render_maps_section(session: WorkingSession) -> None:
         step=5,
         key="priority_kmeans_n_init",
     )
+    normalized_weights = session.parameters.normalized_weights()
+    clustering_feature_weights = {
+        "subject_primary_weighted": normalized_weights.get("subject_primary", 0.0),
+        "subject_secondary_weighted": normalized_weights.get("subject_secondary", 0.0),
+        "delta_gap90_weighted": normalized_weights.get("gap", 0.0),
+        "swd_volume_25km_bbl": normalized_weights.get("swd", 0.0),
+    }
+    apply_feature_weight_scaling = st.checkbox(
+        "Emphasize priority weights during clustering",
+        value=True,
+        help="When enabled, each normalized feature is scaled by the square root of its priority weight before running K-means.",
+        key="priority_apply_feature_weights",
+    )
 
     try:
         prioritized = classify_priority_clusters(
             merged,
             n_clusters=n_clusters,
             n_init=int(n_init),
+            apply_feature_weights=apply_feature_weight_scaling,
+            feature_weights=clustering_feature_weights,
         )
     except Exception as exc:
         st.error(f"Priority clustering failed: {exc}")

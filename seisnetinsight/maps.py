@@ -207,17 +207,28 @@ def classify_priority_clusters(
     n_clusters: int = 4,
     random_state: int = 42,
     n_init: int = 20,
+    apply_feature_weights: bool = True,
+    feature_weights: Optional[Dict[str, float]] = None,
 ) -> pd.DataFrame:
     if features is None:
-        features = DEFAULT_PRIORITY_FEATURES
-    missing = [name for name in features if name not in df.columns]
+        feature_names = list(DEFAULT_PRIORITY_FEATURES)
+    else:
+        feature_names = list(features)
+    missing = [name for name in feature_names if name not in df.columns]
     if missing:
         raise KeyError(f"Missing required feature columns: {', '.join(missing)}")
     if df.empty:
         raise ValueError("Cannot classify priorities on an empty DataFrame.")
-    feature_frame = df[list(features)].fillna(0.0)
+    feature_frame = df[feature_names].fillna(0.0)
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(feature_frame.to_numpy(dtype=float))
+    if apply_feature_weights and feature_weights:
+        weight_vector = np.array(
+            [max(float(feature_weights.get(name, 1.0)), 0.0) for name in feature_names],
+            dtype=float,
+        )
+        if np.any(weight_vector > 0):
+            scaled = scaled * np.sqrt(weight_vector)
     model = KMeans(
         n_clusters=n_clusters,
         n_init=n_init,
@@ -241,7 +252,7 @@ def classify_priority_clusters(
         mean_scores = result.groupby("priority_cluster")["composite_index"].mean()
         mapping = _label_mapping(mean_scores)
     else:
-        sums = result.groupby("priority_cluster")[list(features)].mean().sum(axis=1)
+        sums = result.groupby("priority_cluster")[feature_names].mean().sum(axis=1)
         mapping = _label_mapping(sums)
     result["priority_label"] = result["priority_cluster"].map(mapping)
     return result
