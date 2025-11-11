@@ -22,6 +22,7 @@ class GridParameters:
     subject_secondary_min_stations: int = 1
     subject_secondary_weight: float = 0.35
     gap_search_km: float = 30.0
+    gap_target_angle_deg: float = 90.0
     weight_gap: float = 0.05
     swd_radius_km: float = 25.0
     weight_swd: float = 0.2
@@ -58,6 +59,7 @@ DEFAULT_PARAMETER_NAMES = [
     "SUBJECT_SECONDARY_MIN_STATIONS",
     "SUBJECT_SECONDARY_WEIGHT",
     "GAP_SEARCH_KM",
+    "GAP_TARGET_ANGLE",
     "WEIGHT_GAP",
     "SWD_RADIUS_KM",
     "WEIGHT_SWD",
@@ -126,6 +128,7 @@ def parameter_from_inputs(inputs: Dict[str, object], logger: Optional[Callable[[
         get(("SUBJECT_SECONDARY_WEIGHT", "WEIGHT_SUB10"), params.subject_secondary_weight)
     )
     params.gap_search_km = float(get("GAP_SEARCH_KM", params.gap_search_km))
+    params.gap_target_angle_deg = float(get("GAP_TARGET_ANGLE", params.gap_target_angle_deg))
     params.weight_gap = float(get("WEIGHT_GAP", params.weight_gap))
     params.swd_radius_km = float(get("SWD_RADIUS_KM", params.swd_radius_km))
     params.weight_swd = float(get("WEIGHT_SWD", params.weight_swd))
@@ -146,6 +149,7 @@ def parameter_dict(params: GridParameters) -> Dict[str, object]:
         "SUBJECT_SECONDARY_MIN_STATIONS": params.subject_secondary_min_stations,
         "SUBJECT_SECONDARY_WEIGHT": params.subject_secondary_weight,
         "GAP_SEARCH_KM": params.gap_search_km,
+        "GAP_TARGET_ANGLE": getattr(params, "gap_target_angle_deg", 90.0),
         "WEIGHT_GAP": params.weight_gap,
         "SWD_RADIUS_KM": params.swd_radius_km,
         "WEIGHT_SWD": params.weight_swd,

@@ -86,6 +86,7 @@ class SessionState:
             "SUBJECT_SECONDARY_WEIGHT", "WEIGHT_SUB10", float, params.subject_secondary_weight
         )
         params.gap_search_km = _get("GAP_SEARCH_KM", None, float, params.gap_search_km)
+        params.gap_target_angle_deg = _get("GAP_TARGET_ANGLE", None, float, params.gap_target_angle_deg)
         params.weight_gap = _get("WEIGHT_GAP", None, float, params.weight_gap)
         params.swd_radius_km = _get("SWD_RADIUS_KM", None, float, params.swd_radius_km)
         params.weight_swd = _get("WEIGHT_SWD", None, float, params.weight_swd)

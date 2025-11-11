@@ -56,13 +56,39 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename_map)
 
 
+def _apply_column_mapping(df: pd.DataFrame, column_map: Optional[Dict[str, str]]) -> pd.DataFrame:
+    if not column_map:
+        return df
+    rename_map: Dict[str, str] = {}
+    lower_lookup = {col.lower(): col for col in df.columns}
+    for canonical, raw_actual in column_map.items():
+        if not raw_actual:
+            continue
+        actual = str(raw_actual).strip()
+        if actual in df.columns:
+            rename_map[actual] = canonical
+            continue
+        candidate = lower_lookup.get(actual.lower())
+        if candidate:
+            rename_map[candidate] = canonical
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
 def validate_required_columns(df: pd.DataFrame, required: Iterable[str]) -> List[str]:
     missing = [col for col in required if col not in df.columns]
     return missing
 
 
-def load_events(source, *, warn: bool = True) -> Tuple[pd.DataFrame, List[str]]:
+def load_events(
+    source,
+    *,
+    column_map: Optional[Dict[str, str]] = None,
+    warn: bool = True,
+) -> Tuple[pd.DataFrame, List[str]]:
     df = _read_dataframe(source)
+    df = _apply_column_mapping(df, column_map)
     df = _standardize_columns(df)
     missing = validate_required_columns(df, EXPECTED_EVENT_COLUMNS)
     if "origin_time" in df.columns:
@@ -73,8 +99,14 @@ def load_events(source, *, warn: bool = True) -> Tuple[pd.DataFrame, List[str]]:
     return df, missing
 
 
-def load_stations(source, *, warn: bool = True) -> Tuple[pd.DataFrame, List[str]]:
+def load_stations(
+    source,
+    *,
+    column_map: Optional[Dict[str, str]] = None,
+    warn: bool = True,
+) -> Tuple[pd.DataFrame, List[str]]:
     df = _read_dataframe(source)
+    df = _apply_column_mapping(df, column_map)
     df = _standardize_columns(df)
     missing = validate_required_columns(df, EXPECTED_STATION_COLUMNS)
     if warn and missing:
@@ -83,8 +115,14 @@ def load_stations(source, *, warn: bool = True) -> Tuple[pd.DataFrame, List[str]
     return df, missing
 
 
-def load_swd_wells(source, *, warn: bool = True) -> Tuple[pd.DataFrame, List[str]]:
+def load_swd_wells(
+    source,
+    *,
+    column_map: Optional[Dict[str, str]] = None,
+    warn: bool = True,
+) -> Tuple[pd.DataFrame, List[str]]:
     df = _read_dataframe(source)
+    df = _apply_column_mapping(df, column_map)
     df = _standardize_columns(df)
     missing = validate_required_columns(df, EXPECTED_SWD_COLUMNS)
     if warn and missing:
