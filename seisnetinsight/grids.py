@@ -28,6 +28,21 @@ class GridDefinition:
         return self.coordinates.shape[0]
 
 
+def _clip_to_aoi(df: pd.DataFrame, params: GridParameters) -> pd.DataFrame:
+    """Return only rows that fall within the configured AOI bounds."""
+    if df is None or df.empty:
+        return df
+    if "latitude" not in df.columns or "longitude" not in df.columns:
+        return df
+    lat_min, lat_max = sorted(params.lats)
+    lon_min, lon_max = sorted(params.lons)
+    mask = (
+        df["latitude"].between(lat_min, lat_max)
+        & df["longitude"].between(lon_min, lon_max)
+    )
+    return df.loc[mask].copy()
+
+
 def generate_grid(params: GridParameters) -> GridDefinition:
     lats = np.arange(params.lats[0], params.lats[1] + params.grid_step, params.grid_step)
     lons = np.arange(params.lons[0], params.lons[1] + params.grid_step, params.grid_step)
@@ -154,6 +169,8 @@ def compute_gap_grid(
     progress: Optional[Callable[[float, str], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> pd.DataFrame:
+    events = _clip_to_aoi(events, params)
+    stations = _clip_to_aoi(stations, params)
     if events.empty or stations.empty:
         raise ValueError("Events and stations data must be provided to compute gap grids.")
 
